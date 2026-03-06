@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower of Hanoi VR</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            overflow: hidden; 
+            background: #000; 
+            font-family: 'Segoe UI', Arial, sans-serif;
+            color: #fff;
+        }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            pointer-events: none;
+            z-index: 10;
+            background: rgba(0,0,0,0.6);
+            padding: 12px 24px;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+        }
+        #info h1 { font-size: 22px; margin-bottom: 4px; }
+        #info p { font-size: 13px; opacity: 0.8; }
+        #moves {
+            position: absolute;
+            top: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 16px;
+            background: rgba(0,0,0,0.5);
+            padding: 8px 18px;
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #vr-button {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 16px 40px;
+            font-size: 18px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            cursor: pointer;
+            z-index: 10;
+            transition: all 0.2s;
+            box-shadow: 0 4px 20px rgba(99,102,241,0.4);
+        }
+        #vr-button:hover { 
+            transform: translateX(-50%) scale(1.05); 
+            box-shadow: 0 6px 30px rgba(99,102,241,0.6);
+        }
+        #vr-button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        #win-overlay {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.85);
+            padding: 40px 60px;
+            border-radius: 20px;
+            text-align: center;
+            z-index: 20;
+            backdrop-filter: blur(20px);
+            border: 2px solid rgba(99,102,241,0.5);
+        }
+        #win-overlay h2 { font-size: 32px; margin-bottom: 10px; }
+        #win-overlay p { font-size: 18px; opacity: 0.8; margin-bottom: 20px; }
+        #win-overlay button {
+            padding: 12px 30px;
+            font-size: 16px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h1>🗼 Tower of Hanoi VR</h1>
+        <p>VR: Grab discs with triggers &nbsp;|&nbsp; Desktop: Click &amp; drag discs</p>
+    </div>
+    <div id="moves">Moves: 0</div>
+    <button id="vr-button">Enter VR</button>
+    <div id="win-overlay">
+        <h2>🎉 You Win!</h2>
+        <p id="win-text">Completed in 0 moves</p>
+        <button onclick="resetGame()">Play Again</button>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+        // ============================================================
+        // CONFIGURATION
+        // ============================================================
+        const NUM_DISCS = 5;
+        const TABLE_WIDTH = 1.2;
+        const TABLE_DEPTH = 0.7;
+        const TABLE_HEIGHT = 0.85;
+        const TABLE_THICKNESS = 0.06;
+        const PEG_HEIGHT = 0.30;
+        const PEG_RADIUS = 0.015;
+        const DISC_HEIGHT = 0.035;
+        const DISC_MIN_RADIUS = 0.04;
+        const DISC_MAX_RADIUS = 0.12;
+        const PEG_SPACING = 0.35;
+        const MAGNET_RANGE = 0.15;
+        const MAGNET_STRENGTH = 0.12;
+        const BOUNDARY_MARGIN = 0.05;
+
+        const DISC_COLORS = [
+            0xe74c3c, // red
+            0xf39c12, // orange
+            0xf1c40f, // yellow
+            0x2ecc71, // green
+            0x3498db, // blue
+            0x9b59b6, // purple
+            0x1abc9c, // teal
+        ];
+
+        // ============================================================
+        // GLOBALS
+        // ============================================================
+        let scene, camera, renderer, controls;
+        let pegs = [];       // { mesh, position (world), stack: [disc indices bottom->top] }
+        let discs = [];      // { mesh, index (0=largest), radius }
+        let moveCount = 0;
+        let gameWon = false;
+
+        // Desktop drag
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        let draggedDisc = null;
+        let dragPlane = new THREE.Plane();
+        let dragOffset = new THREE.Vector3();
+        let isDragging = false;
+        let dragSourcePeg = null;
+
+        // VR
+        let vrSession = null;
+        let controllers = [];
+        let controllerGrips = [];
+        let grabbedByController = [null, null]; // disc grabbed by each controller
+        let grabOffsets = [new THREE.Vector3(), new THREE.Vector3()];
+        let prevSqueezeState = [false, false];
+        let vrSourcePeg = [null, null];
+
+        // Table bounding box (world coords, set after table creation)
+        let tableBounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0, topY: 0 };
+
+        // ============================================================
+        // INIT
+        // ============================================================
+        init();
+        animate();
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+            scene.fog = new THREE.Fog(0x1a1a2e, 3, 10);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
+            camera.position.set(0, TABLE_HEIGHT + 0.5, 0.8);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.xr.enabled = true;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
+            document.body.appendChild(renderer.domElement);
+
+            // Controls (desktop)
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, TABLE_HEIGHT, 0);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.maxPolarAngle = Math.PI / 2.05;
+            controls.minDistance = 0.3;
+            controls.maxDistance = 3;
+            controls.update();
+
+            // Lighting
+            setupLighting();
+
+            // Environment
+            setupEnvironment();
+
+            // Table
+            createTable();
+
+            // Pegs
+            createPegs();
+
+            // Discs
+            createDiscs();
+
+            // Place all discs on first peg
+            resetGame();
+
+            // VR setup
+            setupVR();
+
+            // Desktop interaction
+            setupDesktopInteraction();
+
+            // Resize
+            window.addEventListener('resize', onResize);
+        }
+
+        // ============================================================
+        // LIGHTING
+        // ============================================================
+        function setupLighting() {
+            // Ambient
+            const ambientLight = new THREE.AmbientLight(0x404060, 0.6);
+            scene.add(ambientLight);
+
+            // Hemisphere
+            const hemiLight = new THREE.HemisphereLight(0x8888cc, 0x444422, 0.5);
+            scene.add(hemiLight);
+
+            // Key light
+            const dirLight = new THREE.DirectionalLight(0xfff0dd, 1.2);
+            dirLight.position.set(1.5, 3, 2);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.set(2048, 2048);
+            dirLight.shadow.camera.near = 0.5;
+            dirLight.shadow.camera.far = 8;
+            dirLight.shadow.camera.left = -2;
+            dirLight.shadow.camera.right = 2;
+            dirLight.shadow.camera.top = 2;
+            dirLight.shadow.camera.bottom = -2;
+            dirLight.shadow.bias = -0.0005;
+            scene.add(dirLight);
+
+            // Fill light
+            const fillLight = new THREE.DirectionalLight(0x6688cc, 0.3);
+            fillLight.position.set(-1, 2, -1);
+            scene.add(fillLight);
+
+            // Soft point light over the table
+            const pointLight = new THREE.PointLight(0xffeedd, 0.5, 3);
+            pointLight.position.set(0, TABLE_HEIGHT + 0.8, 0);
+            scene.add(pointLight);
+        }
+
+        // ============================================================
+        // ENVIRONMENT
+        // ============================================================
+        function setupEnvironment() {
+            // Floor
+            const floorGeo = new THREE.PlaneGeometry(20, 20);
+            const floorMat = new THREE.MeshStandardMaterial({
+                color: 0x222233,
+                roughness: 0.9,
+                metalness: 0.1,
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Subtle grid for depth perception
+            const gridHelper = new THREE.GridHelper(20, 40, 0x333355, 0x2a2a44);
+            gridHelper.position.y = 0.001;
+            scene.add(gridHelper);
+        }
+
+        // ============================================================
+        // TABLE
+        // ============================================================
+        function createTable() {
+            const tableGroup = new THREE.Group();
+
+            // Tabletop
+            const topGeo = new THREE.BoxGeometry(TABLE_WIDTH, TABLE_THICKNESS, TABLE_DEPTH);
+            const topMat = new THREE.MeshStandardMaterial({
+                color: 0x5c3a1e,
+                roughness: 0.55,
+                metalness: 0.05,
+            });
+            const tabletop = new THREE.Mesh(topGeo, topMat);
+            tabletop.position.y = TABLE_HEIGHT;
+            tabletop.castShadow = true;
+            tabletop.receiveShadow = true;
+            tableGroup.add(tabletop);
+
+            // Felt surface on top
+            const feltGeo = new THREE.BoxGeometry(TABLE_WIDTH - 0.04, 0.005, TABLE_DEPTH - 0.04);
+            const feltMat = new THREE.MeshStandardMaterial({
+                color: 0x1a5c32,
+                roughness: 0.95,
+                metalness: 0.0,
+            });
+            const felt = new THREE.Mesh(feltGeo, feltMat);
+            felt.position.y = TABLE_HEIGHT + TABLE_THICKNESS / 2 + 0.0025;
+            felt.receiveShadow = true;
+            tableGroup.add(felt);
+
+            // Table legs
+            const legGeo = new THREE.CylinderGeometry(0.025, 0.03, TABLE_HEIGHT - TABLE_THICKNESS / 2, 8);
+            const legMat = new THREE.MeshStandardMaterial({
+                color: 0x3e2512,
+                roughness: 0.7,
+                metalness: 0.1,
+            });
+            const legPositions = [
+                [-TABLE_WIDTH / 2 + 0.06, (TABLE_HEIGHT - TABLE_THICKNESS / 2) / 2, -TABLE_DEPTH / 2 + 0.06],
+                [TABLE_WIDTH / 2 - 0.06, (TABLE_HEIGHT - TABLE_THICKNESS / 2) / 2, -TABLE_DEPTH / 2 + 0.06],
+                [-TABLE_WIDTH / 2 + 0.06, (TABLE_HEIGHT - TABLE_THICKNESS / 2) / 2, TABLE_DEPTH / 2 - 0.06],
+                [TABLE_WIDTH / 2 - 0.06, (TABLE_HEIGHT - TABLE_THICKNESS / 2) / 2, TABLE_DEPTH / 2 - 0.06],
+            ];
+            legPositions.forEach(pos => {
+                const leg = new THREE.Mesh(legGeo, legMat);
+                leg.position.set(...pos);
+                leg.castShadow = true;
+                tableGroup.add(leg);
+            });
+
+            scene.add(tableGroup);
+
+            // Set table bounds
+            const halfW = TABLE_WIDTH / 2 - BOUNDARY_MARGIN;
+            const halfD = TABLE_DEPTH / 2 - BOUNDARY_MARGIN;
+            tableBounds.minX = -halfW;
+            tableBounds.maxX = halfW;
+            tableBounds.minZ = -halfD;
+            tableBounds.maxZ = halfD;
+            tableBounds.topY = TABLE_HEIGHT + TABLE_THICKNESS / 2 + 0.003;
+        }
+
+        // ============================================================
+        // PEGS
+        // ============================================================
+        function createPegs() {
+            const pegGeo = new THREE.CylinderGeometry(PEG_RADIUS, PEG_RADIUS + 0.003, PEG_HEIGHT, 16);
+            const pegMat = new THREE.MeshStandardMaterial({
+                color: 0xc9a96e,
+                roughness: 0.4,
+                metalness: 0.2,
+            });
+
+            // Base disc for each peg
+            const baseGeo = new THREE.CylinderGeometry(0.06, 0.065, 0.01, 24);
+            const baseMat = new THREE.MeshStandardMaterial({
+                color: 0xb8944e,
+                roughness: 0.5,
+                metalness: 0.15,
+            });
+
+            for (let i = 0; i < 3; i++) {
+                const x = (i - 1) * PEG_SPACING;
+                const y = tableBounds.topY;
+
+                // Peg
+                const peg = new THREE.Mesh(pegGeo, pegMat);
+                peg.position.set(x, y + PEG_HEIGHT / 2, 0);
+                peg.castShadow = true;
+                scene.add(peg);
+
+                // Base
+                const base = new THREE.Mesh(baseGeo, baseMat);
+                base.position.set(x, y + 0.005, 0);
+                base.castShadow = true;
+                base.receiveShadow = true;
+                scene.add(base);
+
+                pegs.push({
+                    mesh: peg,
+                    x: x,
+                    z: 0,
+                    baseY: y,
+                    stack: [],
+                });
+            }
+        }
+
+        // ============================================================
+        // DISCS
+        // ============================================================
+        function createDiscs() {
+            for (let i = 0; i < NUM_DISCS; i++) {
+                const t = NUM_DISCS === 1 ? 0.5 : i / (NUM_DISCS - 1);
+                const radius = THREE.MathUtils.lerp(DISC_MAX_RADIUS, DISC_MIN_RADIUS, t);
+                const innerRadius = PEG_RADIUS + 0.005;
+
+                // Create torus-like disc with hole
+                const shape = new THREE.Shape();
+                shape.absarc(0, 0, radius, 0, Math.PI * 2, false);
+                const hole = new THREE.Path();
+                hole.absarc(0, 0, innerRadius, 0, Math.PI * 2, true);
+                shape.holes.push(hole);
+
+                const extrudeSettings = {
+                    depth: DISC_HEIGHT,
+                    bevelEnabled: true,
+                    bevelThickness: 0.004,
+                    bevelSize: 0.004,
+                    bevelSegments: 3,
+                };
+                const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                geo.rotateX(-Math.PI / 2);
+                geo.translate(0, DISC_HEIGHT / 2 + 0.004, 0);
+
+                const color = DISC_COLORS[i % DISC_COLORS.length];
+                const mat = new THREE.MeshStandardMaterial({
+                    color: color,
+                    roughness: 0.35,
+                    metalness: 0.15,
+                    emissive: color,
+                    emissiveIntensity: 0.05,
+                });
+
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                mesh.userData.discIndex = i;
+                scene.add(mesh);
+
+                discs.push({ mesh, index: i, radius });
+            }
+        }
+
+        // ============================================================
+        // GAME LOGIC
+        // ============================================================
+        window.resetGame = function() {
+            moveCount = 0;
+            gameWon = false;
+            document.getElementById('moves').textContent = 'Moves: 0';
+            document.getElementById('win-overlay').style.display = 'none';
+
+            // Clear all peg stacks
+            pegs.forEach(p => p.stack = []);
+
+            // Place all discs on peg 0 (largest at bottom)
+            for (let i = 0; i < NUM_DISCS; i++) {
+                pegs[0].stack.push(i);
+            }
+
+            // Position discs
+            updateAllDiscPositions();
+        };
+
+        function updateAllDiscPositions() {
+            pegs.forEach(peg => {
+                peg.stack.forEach((discIndex, stackPos) => {
+                    const disc = discs[discIndex];
+                    disc.mesh.position.set(
+                        peg.x,
+                        peg.baseY + stackPos * (DISC_HEIGHT + 0.008) + 0.003,
+                        peg.z
+                    );
+                });
+            });
+        }
+
+        function getDiscYOnPeg(peg) {
+            return peg.baseY + peg.stack.length * (DISC_HEIGHT + 0.008) + 0.003;
+        }
+
+        function findDiscPeg(discIndex) {
+            for (const peg of pegs) {
+                const idx = peg.stack.indexOf(discIndex);
+                if (idx !== -1) return peg;
+            }
+            return null;
+        }
+
+        function canPickDisc(discIndex) {
+            const peg = findDiscPeg(discIndex);
+            if (!peg) return false;
+            return peg.stack[peg.stack.length - 1] === discIndex;
+        }
+
+        function canPlaceOnPeg(peg, discIndex) {
+            if (peg.stack.length === 0) return true;
+            const topDisc = peg.stack[peg.stack.length - 1];
+            return discIndex > topDisc; // Higher index = smaller disc
+        }
+
+        function removeDiscFromPeg(discIndex) {
+            const peg = findDiscPeg(discIndex);
+            if (peg) {
+                const idx = peg.stack.indexOf(discIndex);
+                if (idx !== -1) peg.stack.splice(idx, 1);
+                return peg;
+            }
+            return null;
+        }
+
+        function placeDiscOnPeg(peg, discIndex) {
+            peg.stack.push(discIndex);
+            const disc = discs[discIndex];
+            const targetY = getDiscYOnPeg(peg) - (DISC_HEIGHT + 0.008);
+            disc.mesh.position.set(peg.x, targetY, peg.z);
+        }
+
+        function findNearestPeg(x, z) {
+            let nearest = null;
+            let minDist = Infinity;
+            pegs.forEach(peg => {
+                const dx = x - peg.x;
+                const dz = z - peg.z;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                if (dist < minDist) {
+                    minDist = dist;
+                    nearest = peg;
+                }
+            });
+            return { peg: nearest, dist: minDist };
+        }
+
+        function checkWin() {
+            if (pegs[2].stack.length === NUM_DISCS) {
+                gameWon = true;
+                document.getElementById('win-text').textContent = `Completed in ${moveCount} moves! (Minimum: ${Math.pow(2, NUM_DISCS) - 1})`;
+                document.getElementById('win-overlay').style.display = 'block';
+                // Celebration particle effect
+                celebrateWin();
+            }
+        }
+
+        // ============================================================
+        // CELEBRATION
+        // ============================================================
+        let particles = [];
+        
+        function celebrateWin() {
+            const particleCount = 80;
+            const colors = [0xffd700, 0xff6b6b, 0x48dbfb, 0xff9ff3, 0x54a0ff, 0x5f27cd];
+            
+            for (let i = 0; i < particleCount; i++) {
+                const geo = new THREE.SphereGeometry(0.008, 6, 6);
+                const mat = new THREE.MeshStandardMaterial({
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    emissive: colors[Math.floor(Math.random() * colors.length)],
+                    emissiveIntensity: 0.5,
+                });
+                const p = new THREE.Mesh(geo, mat);
+                p.position.set(
+                    pegs[2].x + (Math.random() - 0.5) * 0.1,
+                    tableBounds.topY + 0.2,
+                    pegs[2].z + (Math.random() - 0.5) * 0.1,
+                );
+                p.userData.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 2,
+                    Math.random() * 3 + 1,
+                    (Math.random() - 0.5) * 2
+                );
+                p.userData.life = 1.0;
+                scene.add(p);
+                particles.push(p);
+            }
+        }
+
+        function updateParticles(dt) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.userData.velocity.y -= 3 * dt;
+                p.position.addScaledVector(p.userData.velocity, dt);
+                p.userData.life -= dt * 0.5;
+                p.material.opacity = Math.max(0, p.userData.life);
+                p.material.transparent = true;
+                if (p.userData.life <= 0) {
+                    scene.remove(p);
+                    p.geometry.dispose();
+                    p.material.dispose();
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        // ============================================================
+        // DESKTOP INTERACTION (mouse/touch)
+        // ============================================================
+        function setupDesktopInteraction() {
+            renderer.domElement.addEventListener('pointerdown', onPointerDown);
+            renderer.domElement.addEventListener('pointermove', onPointerMove);
+            renderer.domElement.addEventListener('pointerup', onPointerUp);
+        }
+
+        function onPointerDown(event) {
+            if (gameWon) return;
+            event.preventDefault();
+            
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            const discMeshes = discs.map(d => d.mesh);
+            const intersects = raycaster.intersectObjects(discMeshes);
+
+            if (intersects.length > 0) {
+                const mesh = intersects[0].object;
+                const discIndex = mesh.userData.discIndex;
+
+                if (canPickDisc(discIndex)) {
+                    isDragging = true;
+                    draggedDisc = discs[discIndex];
+                    dragSourcePeg = findDiscPeg(discIndex);
+                    controls.enabled = false;
+
+                    // Set up drag plane at disc height
+                    const discY = draggedDisc.mesh.position.y;
+                    dragPlane.setFromNormalAndCoplanarPoint(
+                        new THREE.Vector3(0, 1, 0),
+                        new THREE.Vector3(0, discY + 0.05, 0)
+                    );
+
+                    // Compute offset
+                    const intersection = new THREE.Vector3();
+                    raycaster.ray.intersectPlane(dragPlane, intersection);
+                    dragOffset.copy(draggedDisc.mesh.position).sub(intersection);
+
+                    // Lift disc slightly
+                    draggedDisc.mesh.position.y += 0.03;
+
+                    // Highlight
+                    draggedDisc.mesh.material.emissiveIntensity = 0.3;
+                }
+            }
+        }
+
+        function onPointerMove(event) {
+            if (!isDragging || !draggedDisc) return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersection = new THREE.Vector3();
+            if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
+                let targetX = intersection.x + dragOffset.x;
+                let targetZ = intersection.z + dragOffset.z;
+
+                // Clamp to table bounds
+                targetX = THREE.MathUtils.clamp(targetX, tableBounds.minX, tableBounds.maxX);
+                targetZ = THREE.MathUtils.clamp(targetZ, tableBounds.minZ, tableBounds.maxZ);
+
+                // Subtle magnetism toward nearest peg
+                const { peg: nearPeg, dist } = findNearestPeg(targetX, targetZ);
+                if (dist < MAGNET_RANGE && nearPeg) {
+                    const factor = 1.0 - (dist / MAGNET_RANGE);
+                    const magnetPull = factor * factor * MAGNET_STRENGTH;
+                    targetX = THREE.MathUtils.lerp(targetX, nearPeg.x, magnetPull);
+                    targetZ = THREE.MathUtils.lerp(targetZ, nearPeg.z, magnetPull);
+                }
+
+                draggedDisc.mesh.position.x = targetX;
+                draggedDisc.mesh.position.z = targetZ;
+            }
+        }
+
+        function onPointerUp(event) {
+            if (!isDragging || !draggedDisc) return;
+
+            isDragging = false;
+            controls.enabled = true;
+
+            // Unhighlight
+            draggedDisc.mesh.material.emissiveIntensity = 0.05;
+
+            // Find nearest peg
+            const { peg: nearPeg, dist } = findNearestPeg(
+                draggedDisc.mesh.position.x,
+                draggedDisc.mesh.position.z
+            );
+
+            const discIndex = draggedDisc.index;
+
+            if (nearPeg && dist < MAGNET_RANGE && canPlaceOnPeg(nearPeg, discIndex)) {
+                // Valid placement
+                removeDiscFromPeg(discIndex);
+                placeDiscOnPeg(nearPeg, discIndex);
+
+                if (nearPeg !== dragSourcePeg) {
+                    moveCount++;
+                    document.getElementById('moves').textContent = `Moves: ${moveCount}`;
+                }
+
+                checkWin();
+            } else {
+                // Return to source peg
+                if (dragSourcePeg) {
+                    const disc = discs[discIndex];
+                    const stackPos = dragSourcePeg.stack.indexOf(discIndex);
+                    disc.mesh.position.set(
+                        dragSourcePeg.x,
+                        dragSourcePeg.baseY + stackPos * (DISC_HEIGHT + 0.008) + 0.003,
+                        dragSourcePeg.z
+                    );
+                }
+            }
+
+            draggedDisc = null;
+            dragSourcePeg = null;
+        }
+
+        // ============================================================
+        // VR SETUP
+        // ============================================================
+        function setupVR() {
+            const vrButton = document.getElementById('vr-button');
+
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+                    if (supported) {
+                        vrButton.addEventListener('click', onVRButtonClick);
+                    } else {
+                        vrButton.textContent = 'VR Not Supported';
+                        vrButton.disabled = true;
+                    }
+                });
+            } else {
+                vrButton.textContent = 'WebXR Not Available';
+                vrButton.disabled = true;
+            }
+
+            // Controller setup
+            const controllerModelFactory = new XRControllerModelFactory();
+
+            for (let i = 0; i < 2; i++) {
+                const controller = renderer.xr.getController(i);
+                controller.userData.index = i;
+                scene.add(controller);
+                controllers.push(controller);
+
+                // Controller visual (ray/pointer)
+                const geo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, 0),
+                    new THREE.Vector3(0, 0, -0.15),
+                ]);
+                const line = new THREE.Line(
+                    geo,
+                    new THREE.LineBasicMaterial({ color: 0x8888ff, linewidth: 2 })
+                );
+                controller.add(line);
+
+                // Grip model
+                const grip = renderer.xr.getControllerGrip(i);
+                grip.add(controllerModelFactory.createControllerModel(grip));
+                scene.add(grip);
+                controllerGrips.push(grip);
+
+                // Small sphere at controller tip for feedback
+                const tipGeo = new THREE.SphereGeometry(0.01, 8, 8);
+                const tipMat = new THREE.MeshStandardMaterial({
+                    color: 0x8888ff,
+                    emissive: 0x4444ff,
+                    emissiveIntensity: 0.5,
+                });
+                const tip = new THREE.Mesh(tipGeo, tipMat);
+                controller.add(tip);
+            }
+        }
+
+        async function onVRButtonClick() {
+            if (vrSession) {
+                vrSession.end();
+                return;
+            }
+
+            try {
+                const session = await navigator.xr.requestSession('immersive-vr', {
+                    optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+                });
+                vrSession = session;
+
+                renderer.xr.setSession(session);
+                document.getElementById('vr-button').textContent = 'Exit VR';
+
+                session.addEventListener('end', () => {
+                    vrSession = null;
+                    document.getElementById('vr-button').textContent = 'Enter VR';
+                });
+            } catch (err) {
+                console.error('Failed to start VR session:', err);
+            }
+        }
+
+        // ============================================================
+        // VR CONTROLLER INTERACTION
+        // ============================================================
+        function updateVRControllers() {
+            if (!renderer.xr.isPresenting) return;
+
+            const session = renderer.xr.getSession();
+            if (!session) return;
+
+            for (let i = 0; i < 2; i++) {
+                const controller = controllers[i];
+                if (!controller) continue;
+
+                const source = session.inputSources[i];
+                if (!source || !source.gamepad) continue;
+
+                // Squeeze/Grip button is typically index 1
+                const squeezePressed = source.gamepad.buttons[1]?.pressed || false;
+                // Trigger is index 0 - use either for grab
+                const triggerPressed = source.gamepad.buttons[0]?.pressed || false;
+                const grabbing = squeezePressed || triggerPressed;
+                const wasGrabbing = prevSqueezeState[i];
+                prevSqueezeState[i] = grabbing;
+
+                if (grabbing && !wasGrabbing) {
+                    // Just started grabbing - try to pick up disc
+                    tryGrabDisc(i, controller);
+                } else if (!grabbing && wasGrabbing) {
+                    // Just released - drop disc
+                    releaseDisc(i);
+                }
+
+                // If holding disc, update its position
+                if (grabbedByController[i]) {
+                    updateGrabbedDisc(i, controller);
+                }
+            }
+        }
+
+        function tryGrabDisc(controllerIndex, controller) {
+            if (gameWon) return;
+
+            const controllerPos = new THREE.Vector3();
+            controller.getWorldPosition(controllerPos);
+
+            let closest = null;
+            let closestDist = 0.12; // max grab distance
+
+            discs.forEach(disc => {
+                if (!canPickDisc(disc.index)) return;
+                // Check it's not grabbed by other controller
+                if (grabbedByController[1 - controllerIndex] === disc) return;
+
+                const dist = controllerPos.distanceTo(disc.mesh.position);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closest = disc;
+                }
+            });
+
+            if (closest) {
+                grabbedByController[controllerIndex] = closest;
+                vrSourcePeg[controllerIndex] = findDiscPeg(closest.index);
+                grabOffsets[controllerIndex].copy(closest.mesh.position).sub(controllerPos);
+                closest.mesh.material.emissiveIntensity = 0.3;
+            }
+        }
+
+        function updateGrabbedDisc(controllerIndex, controller) {
+            const disc = grabbedByController[controllerIndex];
+            if (!disc) return;
+
+            const controllerPos = new THREE.Vector3();
+            controller.getWorldPosition(controllerPos);
+
+            let targetX = controllerPos.x + grabOffsets[controllerIndex].x;
+            let targetY = controllerPos.y + grabOffsets[controllerIndex].y;
+            let targetZ = controllerPos.z + grabOffsets[controllerIndex].z;
+
+            // Keep above table
+            targetY = Math.max(targetY, tableBounds.topY + 0.01);
+
+            // Clamp to table bounds (with some extra height freedom)
+            targetX = THREE.MathUtils.clamp(targetX, tableBounds.minX, tableBounds.maxX);
+            targetZ = THREE.MathUtils.clamp(targetZ, tableBounds.minZ, tableBounds.maxZ);
+
+            // Subtle magnetism
+            const { peg: nearPeg, dist } = findNearestPeg(targetX, targetZ);
+            if (dist < MAGNET_RANGE && nearPeg) {
+                const factor = 1.0 - (dist / MAGNET_RANGE);
+                const magnetPull = factor * factor * MAGNET_STRENGTH;
+                targetX = THREE.MathUtils.lerp(targetX, nearPeg.x, magnetPull);
+                targetZ = THREE.MathUtils.lerp(targetZ, nearPeg.z, magnetPull);
+            }
+
+            disc.mesh.position.set(targetX, targetY, targetZ);
+        }
+
+        function releaseDisc(controllerIndex) {
+            const disc = grabbedByController[controllerIndex];
+            if (!disc) return;
+
+            disc.mesh.material.emissiveIntensity = 0.05;
+
+            const { peg: nearPeg, dist } = findNearestPeg(disc.mesh.position.x, disc.mesh.position.z);
+            const discIndex = disc.index;
+            const sourcePeg = vrSourcePeg[controllerIndex];
+
+            if (nearPeg && dist < MAGNET_RANGE && canPlaceOnPeg(nearPeg, discIndex)) {
+                removeDiscFromPeg(discIndex);
+                placeDiscOnPeg(nearPeg, discIndex);
+
+                if (nearPeg !== sourcePeg) {
+                    moveCount++;
+                    document.getElementById('moves').textContent = `Moves: ${moveCount}`;
+                }
+
+                checkWin();
+            } else {
+                // Return to source
+                if (sourcePeg) {
+                    const stackPos = sourcePeg.stack.indexOf(discIndex);
+                    disc.mesh.position.set(
+                        sourcePeg.x,
+                        sourcePeg.baseY + stackPos * (DISC_HEIGHT + 0.008) + 0.003,
+                        sourcePeg.z
+                    );
+                }
+            }
+
+            grabbedByController[controllerIndex] = null;
+            vrSourcePeg[controllerIndex] = null;
+        }
+
+        // ============================================================
+        // HOVER HIGHLIGHT (desktop)
+        // ============================================================
+        let hoveredDisc = null;
+
+        function updateHoverHighlight() {
+            if (isDragging || gameWon) return;
+
+            // Use pointer position for highlighting
+            raycaster.setFromCamera(mouse, camera);
+            const discMeshes = discs.filter(d => canPickDisc(d.index)).map(d => d.mesh);
+            const intersects = raycaster.intersectObjects(discMeshes);
+
+            if (hoveredDisc && (!intersects.length || intersects[0].object !== hoveredDisc.mesh)) {
+                hoveredDisc.mesh.material.emissiveIntensity = 0.05;
+                hoveredDisc = null;
+                renderer.domElement.style.cursor = 'default';
+            }
+
+            if (intersects.length > 0) {
+                const mesh = intersects[0].object;
+                const disc = discs[mesh.userData.discIndex];
+                if (disc !== draggedDisc) {
+                    disc.mesh.material.emissiveIntensity = 0.2;
+                    hoveredDisc = disc;
+                    renderer.domElement.style.cursor = 'grab';
+                }
+            }
+        }
+
+        // Passive mouse move for hover
+        renderer.domElement.addEventListener('pointermove', (e) => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        // ============================================================
+        // ANIMATION LOOP
+        // ============================================================
+        const clock = new THREE.Clock();
+
+        function animate() {
+            renderer.setAnimationLoop(render);
+        }
+
+        function render() {
+            const dt = clock.getDelta();
+
+            controls.update();
+            updateVRControllers();
+            updateHoverHighlight();
+            updateParticles(dt);
+
+            // Gentle floating animation for grabbed disc (desktop)
+            if (draggedDisc && isDragging) {
+                draggedDisc.mesh.position.y = tableBounds.topY + 0.08 + Math.sin(Date.now() * 0.003) * 0.005;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // ============================================================
+        // RESIZE
+        // ============================================================
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>

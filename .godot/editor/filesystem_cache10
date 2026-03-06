@@ -1,0 +1,17 @@
+63f7b34db8d8cdea90c76aacccf841ec
+::res://::1772813158
+export_presets.cfg::TextFile::-1::1772813153::0::1::::<><><>0<>0<><>::
+openxr_action_map.tres::OpenXRActionMap::1571645626561118701::1772812975::0::1::::<><><>0<>0<><>::
+README.md::TextFile::-1::1772780363::0::1::::<><><>0<>0<><>::
+::res://bin/::1772813164
+index.apple-touch-icon.png::CompressedTexture2D::8393584750013407073::1772813164::1772813165::1::::<><><>0<>0<>0ff71dd28eaf490665ff38757c1f9357<>res://.godot/imported/index.apple-touch-icon.png-658dccbcf36a8a62114d87333915a888.ctex::
+index.icon.png::CompressedTexture2D::614078216666961315::1772813164::1772813164::1::::<><><>0<>0<>1a35a25761848fac17ae38b3b89c836c<>res://.godot/imported/index.icon.png-4374034a797acc1cab09c56195f8e957.ctex::
+index.png::CompressedTexture2D::4964492122233000870::1772813164::1772813165::1::::<><><>0<>0<>57fe520affd3b26f15ed2535577782ae<>res://.godot/imported/index.png-77e326d5af46906168be0e99791e4fd7.ctex::
+::res://scenes/::1772812975
+main.tscn::PackedScene::4514460318183301441::1772812975::0::1::::<><><>0<>0<><>::uid://bt4gh4n1f7j3k::::res://scripts/main.gd
+::res://scripts/::1772812749
+disc.gd::GDScript::762076963991743650::1772780359::0::1::::<>RigidBody3D<><>0<>0<><>::
+game_manager.gd::GDScript::7828942300597001032::1772780362::0::1::::<>Node<><>0<>0<><>::
+main.gd::GDScript::3780254014646266294::1772812859::0::1::::<>Node3D<><>0<>0<><>::
+peg.gd::GDScript::2472945364029221416::1772780361::0::1::::<>StaticBody3D<><>0<>0<><>::
+vr_hand.gd::GDScript::533017792463711429::1772812914::0::1::::<>XRController3D<><>0<>0<><>::
