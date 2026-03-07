@@ -25,6 +25,10 @@ var game_manager : Node
 var pegs : Array[Node] = []      # 3 peg nodes
 var discs : Array[RigidBody3D] = []
 
+var xr_interface : XRInterface
+var enter_vr_button : Button
+var vr_ui_layer : CanvasLayer
+
 # ── lifecycle ─────────────────────────────────────────────────────────────────
 func _ready() -> void:
 	_build_environment()
@@ -34,6 +38,7 @@ func _ready() -> void:
 	_build_discs()
 	_build_boundary_walls()
 	_add_game_manager()
+	_build_enter_vr_ui()
 
 # ── environment ───────────────────────────────────────────────────────────────
 func _build_environment() -> void:
@@ -117,13 +122,6 @@ func _build_xr_rig() -> void:
 	# Position the rig so the player stands in front of the table
 	xr_origin.position = Vector3(0, 0, 0.6)
 	add_child(xr_origin)
-
-	# Initialise OpenXR
-	var xr_interface := XRServer.find_interface("OpenXR")
-	if xr_interface and xr_interface.initialize():
-		get_viewport().use_xr = true
-	else:
-		push_warning("OpenXR not available — running in flat‑screen debug mode")
 
 func _add_hand_visuals(controller: XRController3D, color: Color) -> void:
 	var mesh_inst := MeshInstance3D.new()
@@ -377,3 +375,90 @@ func _add_game_manager() -> void:
 	var gm_script = load("res://scripts/game_manager.gd")
 	game_manager.set_script(gm_script)
 	add_child(game_manager)
+
+# ── Enter VR UI ───────────────────────────────────────────────────────────────
+func _build_enter_vr_ui() -> void:
+	vr_ui_layer = CanvasLayer.new()
+	vr_ui_layer.name = "VRUILayer"
+	vr_ui_layer.layer = 100  # render on top of everything
+
+	enter_vr_button = Button.new()
+	enter_vr_button.name = "EnterVRButton"
+	enter_vr_button.text = "Enter VR"
+
+	# Style the button
+	enter_vr_button.custom_minimum_size = Vector2(220, 70)
+	enter_vr_button.anchor_left = 0.5
+	enter_vr_button.anchor_top = 1.0
+	enter_vr_button.anchor_right = 0.5
+	enter_vr_button.anchor_bottom = 1.0
+	enter_vr_button.offset_left = -110
+	enter_vr_button.offset_top = -100
+	enter_vr_button.offset_right = 110
+	enter_vr_button.offset_bottom = -30
+
+	# Font overrides for visibility
+	enter_vr_button.add_theme_font_size_override("font_size", 24)
+
+	# Stylebox for a nice look
+	var normal_style := StyleBoxFlat.new()
+	normal_style.bg_color = Color(0.39, 0.40, 0.95)  # indigo
+	normal_style.corner_radius_top_left = 14
+	normal_style.corner_radius_top_right = 14
+	normal_style.corner_radius_bottom_left = 14
+	normal_style.corner_radius_bottom_right = 14
+	normal_style.content_margin_left = 20
+	normal_style.content_margin_right = 20
+	normal_style.content_margin_top = 12
+	normal_style.content_margin_bottom = 12
+	enter_vr_button.add_theme_stylebox_override("normal", normal_style)
+
+	var hover_style := normal_style.duplicate()
+	hover_style.bg_color = Color(0.55, 0.36, 0.96)  # purple hover
+	enter_vr_button.add_theme_stylebox_override("hover", hover_style)
+
+	var pressed_style := normal_style.duplicate()
+	pressed_style.bg_color = Color(0.30, 0.30, 0.80)
+	enter_vr_button.add_theme_stylebox_override("pressed", pressed_style)
+
+	enter_vr_button.pressed.connect(_on_enter_vr_pressed)
+
+	vr_ui_layer.add_child(enter_vr_button)
+	add_child(vr_ui_layer)
+
+func _on_enter_vr_pressed() -> void:
+	# Try WebXR first (for web exports), then fall back to OpenXR
+	xr_interface = XRServer.find_interface("WebXR")
+	if xr_interface:
+		xr_interface.session_mode = "immersive-vr"
+		xr_interface.requested_reference_space_types = "local-floor, bounded-floor, local"
+		xr_interface.required_features = "local-floor"
+		xr_interface.optional_features = "bounded-floor"
+		if xr_interface.is_connected("session_started", _on_webxr_session_started) == false:
+			xr_interface.session_started.connect(_on_webxr_session_started)
+			xr_interface.session_ended.connect(_on_webxr_session_ended)
+		xr_interface.initialize()
+		return
+
+	xr_interface = XRServer.find_interface("OpenXR")
+	if xr_interface and xr_interface.initialize():
+		get_viewport().use_xr = true
+		_hide_vr_button()
+	else:
+		push_warning("No XR interface available — staying in flat-screen mode")
+
+func _on_webxr_session_started() -> void:
+	get_viewport().use_xr = true
+	_hide_vr_button()
+
+func _on_webxr_session_ended() -> void:
+	get_viewport().use_xr = false
+	_show_vr_button()
+
+func _hide_vr_button() -> void:
+	if enter_vr_button:
+		enter_vr_button.visible = false
+
+func _show_vr_button() -> void:
+	if enter_vr_button:
+		enter_vr_button.visible = true
