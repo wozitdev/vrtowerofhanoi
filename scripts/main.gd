@@ -50,8 +50,8 @@ func _build_environment() -> void:
 	env.ambient_light_color = Color(0.35, 0.35, 0.40)
 	env.ambient_light_energy = 0.6
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.glow_enabled = true
-	env.glow_intensity = 0.3
+	# Glow disabled — causes stereo rendering mismatch between eyes in VR
+	env.glow_enabled = false
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
@@ -61,7 +61,7 @@ func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.light_color = Color(1.0, 0.96, 0.90)
 	sun.light_energy = 1.2
-	sun.shadow_enabled = true
+	sun.shadow_enabled = false
 	sun.rotation_degrees = Vector3(-50, -30, 0)
 	add_child(sun)
 
@@ -131,8 +131,7 @@ func _add_hand_visuals(controller: XRController3D, color: Color) -> void:
 	sphere.height = 0.06
 	mesh_inst.mesh = sphere
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(color.r, color.g, color.b, 1.0)
 	mat.roughness = 0.3
 	mat.metallic = 0.2
 	mesh_inst.material_override = mat
@@ -301,10 +300,7 @@ func _build_discs() -> void:
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = color
 		mat.roughness = 0.35
-		mat.metallic = 0.3
-		mat.emission_enabled = true
-		mat.emission = color * 0.15
-		mat.emission_energy_multiplier = 0.5
+		mat.metallic = 0.15
 		mesh.material_override = mat
 		disc.add_child(mesh)
 
@@ -324,8 +320,8 @@ func _build_discs() -> void:
 		disc.set_meta("disc_index", i)
 		disc.set_meta("disc_radius", radius)
 
-		# Stack on peg 0, largest at bottom
-		var stack_y : float = surface_y + DISC_HEIGHT * 0.5 + (NUM_DISCS - 1 - i) * DISC_HEIGHT
+		# Stack on peg 0, largest (i=0) at bottom, smallest (i=NUM_DISCS-1) on top
+		var stack_y : float = surface_y + DISC_HEIGHT * 0.5 + i * DISC_HEIGHT
 		disc.position = Vector3(-PEG_SPACING, stack_y, 0)
 
 		add_child(disc)
@@ -335,10 +331,8 @@ func _build_discs() -> void:
 	# (done after a frame so peg scripts are ready)
 	await get_tree().process_frame
 	if pegs.size() > 0 and pegs[0].has_method("init_stack"):
-		# Largest disc first (index NUM_DISCS-1) up to smallest (index 0)
-		var ordered_discs : Array = []
-		for i in range(NUM_DISCS - 1, -1, -1):
-			ordered_discs.append(discs[i])
+		# Bottom → top order: disc 0 (largest) first, disc N-1 (smallest) last
+		var ordered_discs : Array = discs.duplicate()
 		pegs[0].init_stack(ordered_discs)
 
 # ── boundary walls (invisible) ───────────────────────────────────────────────

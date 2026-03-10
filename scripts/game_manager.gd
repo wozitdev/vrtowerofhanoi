@@ -34,15 +34,8 @@ func _ready() -> void:
 	counter.position = Vector3(0, 1.40, 0)
 	get_tree().current_scene.add_child.call_deferred(counter)
 
-	# Connect to disc signals
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var main_node := get_tree().current_scene
-	for disc in main_node.discs:
-		if disc.has_signal("released"):
-			disc.released.connect(_on_disc_released)
-
-func _on_disc_released(_disc: RigidBody3D) -> void:
+## Called by vr_hand when a disc is placed on a different peg than it came from.
+func record_move() -> void:
 	_move_count += 1
 	var counter := get_tree().current_scene.get_node_or_null("MoveCounter")
 	if counter:

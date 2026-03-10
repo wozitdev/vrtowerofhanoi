@@ -13,8 +13,6 @@ var _grab_offset : Vector3 = Vector3.ZERO
 var _holder      : Node3D  = null  # the VR hand holding us
 
 # ── visual feedback ───────────────────────────────────────────────────────────
-var _base_emission_energy : float = 0.5
-var _highlight_emission   : float = 2.0
 var _mesh : MeshInstance3D = null
 
 func _ready() -> void:
@@ -29,19 +27,15 @@ func _ready() -> void:
 	# Collision layer: 1 = physics world, 2 = snap detection
 	collision_layer = 1 | 2
 	collision_mask  = 1
+	# Start frozen — discs sit still until grabbed
+	freeze = true
 
-func _physics_process(delta: float) -> void:
+func _process(delta: float) -> void:
 	if is_grabbed and _holder:
-		# Move toward hand smoothly (soft attach — feels nice in VR)
-		var target_pos : Vector3 = _holder.global_position + _grab_offset
-		var diff := target_pos - global_position
-		linear_velocity = diff / max(delta, 0.001) * 0.8
-		angular_velocity = Vector3.ZERO
-		# Keep upright while held
-		var current_basis := global_transform.basis
-		var up := Vector3.UP
-		var target_basis := Basis.looking_at(-current_basis.z, up)
-		global_transform.basis = current_basis.slerp(target_basis, 8.0 * delta)
+		# Directly position the disc at the hand (kinematic tracking)
+		global_position = _holder.global_position + _grab_offset
+		# Keep disc flat / upright
+		global_transform.basis = global_transform.basis.slerp(Basis.IDENTITY, clampf(10.0 * delta, 0.0, 1.0))
 
 # ── grab / release API (called by VR hand) ───────────────────────────────────
 func grab(hand: Node3D) -> void:
@@ -50,9 +44,10 @@ func grab(hand: Node3D) -> void:
 	is_grabbed = true
 	_holder = hand
 	_grab_offset = global_position - hand.global_position
-	# Reduce gravity while held
-	gravity_scale = 0.0
-	linear_damp = 8.0
+	# Freeze the body so we can position it directly (kinematic)
+	freeze = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
 	# Pop off current peg
 	if current_peg and current_peg.has_method("remove_disc"):
 		current_peg.remove_disc(self)
@@ -66,40 +61,42 @@ func release() -> void:
 		return
 	is_grabbed = false
 	_holder = null
-	gravity_scale = 3.0
-	linear_damp = 2.0
+	# Stay frozen — vr_hand will either snap us or we'll be unfrozen to fall
 	# Un‑highlight
 	_set_highlight(false)
 	released.emit(self)
+
+## Called by vr_hand when the disc isn't snapped to a peg — let it drop.
+func drop_free() -> void:
+	freeze = false
+	gravity_scale = 3.0
+	linear_damp = 2.0
+	angular_damp = 4.0
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 func _set_highlight(on: bool) -> void:
 	if _mesh and _mesh.material_override:
 		var mat := _mesh.material_override as StandardMaterial3D
 		if mat:
-			mat.emission_energy_multiplier = _highlight_emission if on else _base_emission_energy
+			if on:
+				mat.emission_enabled = true
+				mat.emission = mat.albedo_color * 0.4
+				mat.emission_energy_multiplier = 1.0
+			else:
+				mat.emission_enabled = false
 
 func snap_to(peg_node: Node, stack_y: float) -> void:
 	current_peg = peg_node
-	# Smoothly tween into place
 	var target := Vector3(peg_node.global_position.x, stack_y, peg_node.global_position.z)
-	# Zero velocities and disable gravity briefly
+	# Keep frozen, tween into position
+	freeze = true
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
-	gravity_scale = 0.0
-	freeze = true
 
 	var tw := create_tween()
 	tw.set_ease(Tween.EASE_OUT)
 	tw.set_trans(Tween.TRANS_BACK)
-	tw.tween_property(self, "global_position", target, 0.2)
-	# Also fix rotation to be flat
-	var flat_basis := Basis.IDENTITY
-	tw.parallel().tween_property(self, "global_transform:basis", flat_basis, 0.2)
-	tw.tween_callback(_finish_snap)
-
-func _finish_snap() -> void:
-	freeze = false
-	gravity_scale = 3.0
-	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
+	tw.tween_property(self, "global_position", target, 0.18)
+	# Flatten rotation
+	tw.parallel().tween_property(self, "global_transform:basis", Basis.IDENTITY, 0.18)
+	# Stay frozen after snap — disc is resting on the peg
